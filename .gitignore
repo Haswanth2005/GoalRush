@@ -2,34 +2,8 @@
 *
 */
 
-# Except directories
-!*/
+# Only allow the script folder
 !.gitignore
-
-# Keep only essential folders
 !Assets/
-!Packages/
-!ProjectSettings/
-
-# Exclude generated/temporary files from included folders
-Library/
-Temp/
-Logs/
-UserSettings/
-Builds/
-Build/
-
-# Visual Studio
-*.csproj
-*.sln
-.vscode/
-.vs/
-
-# Generated files
-*.userprefs
-*.csproj.bak
-*.meta
-
-# OS files
-.DS_Store
-Thumbs.db
+!Assets/script/
+!Assets/script/**
