@@ -51,55 +51,56 @@ public class CameraController : MonoBehaviour
 
     private void LateUpdate()
     {
-        // 1. Initialization Check
-        if (!_isInitialized || _team == null || _team._currentPlayer.Count == 0) 
+        if (_team == null)
         {
-            if (_team == null)
-            {
-                Team[] allTeams = Object.FindObjectsByType<Team>(FindObjectsSortMode.None);
-                foreach (Team t in allTeams)
-                {
-                    if (t._currentPlayer.Count > 0)
-                    {
-                        _team = t;
-                        break;
-                    }
-                }
-            }
-
-            if (_team != null && _team._currentPlayer.Count > 0)
-            {
-                // Calculate the initial offset so the camera maintains its current height/angle
-                _worldOffset = transform.position - _team._currentPlayer[0].transform.position;
-                _isInitialized = true;
-            }
-            return;
+            _team = Object.FindAnyObjectByType<Team>();
+            if (_team == null) return;
         }
 
-        // 2. Hybrid Follow: Track the midpoint between the Player and the Ball
+        if (_team._currentPlayer.Count == 0) return;
+
         Player targetPlayer = _team._currentPlayer[0];
-        Vector3 focusPoint;
+        if (targetPlayer == null) return;
+
+        // Settings for a high-quality feel
+        float backDistance = 7f;
+        float height = 4f;
+        float rotationSpeed = 5f; // Speed of camera rotation smoothing
+
+        // 1. Position smoothing
+        // Position target: Stay at a fixed world-space offset relative to the player 
+        // to prevent nausea from constant camera spinning, but stay far enough back.
+        Vector3 behindPos = targetPlayer.transform.position + new Vector3(0, height, -backDistance);
         
+        transform.position = Vector3.SmoothDamp(transform.position, behindPos, ref _velocity, smoothTime);
+
+        // 2. Rotation smoothing
+        // Look at the midpoint between player and ball
+        Vector3 focusPoint;
         if (Ball.Instance != null)
         {
-            focusPoint = Vector3.Lerp(targetPlayer.transform.position, Ball.Instance.transform.position, 0.5f);
+            focusPoint = Vector3.Lerp(targetPlayer.transform.position, Ball.Instance.transform.position, 0.4f);
         }
         else
         {
             focusPoint = targetPlayer.transform.position;
         }
 
-        Vector3 targetPosition = focusPoint + _worldOffset;
-        transform.position = Vector3.SmoothDamp(transform.position, targetPosition, ref _velocity, smoothTime);
+        // Add a vertical offset to the look target so we aren't looking at their feet
+        Vector3 lookTarget = focusPoint + Vector3.up * 1.2f;
+        
+        // Calculate the rotation we WANT
+        Quaternion targetRotation = Quaternion.LookRotation(lookTarget - transform.position);
+        
+        // Smoothly rotate toward that target rotation
+        transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, Time.deltaTime * rotationSpeed);
 
-        // 3. Dynamic Zoom (Zooms out if active player is far from ball)
-        if (enableDynamicZoom && _team != null && _team._currentPlayer.Count > 0)
+        // 3. Dynamic Zoom (Smoothly adjust FOV)
+        if (enableDynamicZoom && Ball.Instance != null)
         {
             float distToBall = Vector3.Distance(targetPlayer.transform.position, Ball.Instance.transform.position);
-            
             float targetFov = _baseFov + (distToBall * ballDistanceImpact);
             targetFov = Mathf.Clamp(targetFov, _baseFov, maxZoomOutFov);
-
             _cam.fieldOfView = Mathf.Lerp(_cam.fieldOfView, targetFov, Time.deltaTime * zoomSpeed);
         }
     }

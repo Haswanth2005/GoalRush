@@ -71,6 +71,14 @@ public class Kicking : MonoBehaviour
         Player kicker = _team._currentPlayer[0];
         if (Ball.Instance == null) return;
 
+        // Trigger kick animation
+        Animator anim = kicker.GetComponent<Animator>();
+        if (anim == null) anim = kicker.GetComponentInChildren<Animator>();
+        if (anim != null)
+        {
+            anim.SetTrigger("Kick");
+        }
+
         // Direction toward the mouse cursor (horizontal)
         Vector3 direction = DirectionIndicator.GetMouseDirection(kicker.transform.position);
 

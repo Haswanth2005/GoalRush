@@ -65,38 +65,49 @@ public class Possession : MonoBehaviour
       GainPossession();
   }
 
-  private void FixedUpdate()
-  {
-    if (!_player.hasPossession) return;
-    if (Ball.Instance == null) return;
+    private void FixedUpdate()
+    {
+        if (!_player.hasPossession) return;
+        if (Ball.Instance == null) return;
 
-    // Target: in front of the player based on facing direction
-    Vector3 targetPos = transform.position + transform.forward * dribbleDistance;
-    targetPos.y = Ball.Instance.transform.position.y;
+        // 1. Determine target position
+        // If the player has a designated BallPosition transform, use it.
+        // Otherwise, use a point 0.8m in front of them.
+        Vector3 targetPos;
+        if (_player.ballPosition != null)
+        {
+            targetPos = _player.ballPosition.position;
+        }
+        else
+        {
+            targetPos = transform.position + transform.forward * 0.8f;
+            targetPos.y = 0.13f; 
+        }
 
-    // Offset from ball to where it should be
-    Vector3 offset = targetPos - Ball.Instance.transform.position;
-    offset.y = 0f;
-
-    // Base velocity = player's velocity (ball moves WITH the player)
-    Vector3 playerVel = _playerRb != null ? _playerRb.linearVelocity : Vector3.zero;
-    playerVel.y = 0f;
-
-    // Correction pushes ball toward the front position
-    Vector3 correction = offset * correctionSpeed;
-
-    // Desired horizontal velocity
-    Vector3 desiredVel = playerVel + correction;
-
-    // Smoothly blend to desired velocity, preserve gravity
-    Vector3 currentVel = Ball.Instance.rb.linearVelocity;
-    float gravityY = currentVel.y;
-
-    Vector3 newVel = Vector3.Lerp(currentVel, desiredVel, Time.fixedDeltaTime * 15f);
-    newVel.y = gravityY;
-
-    Ball.Instance.rb.linearVelocity = newVel;
-  }
+        // 2. Physics-based Dribble Smoothing
+        // Use a PD-controller style approach for extremely smooth ball following
+        Vector3 currentBallPos = Ball.Instance.transform.position;
+        Vector3 playerVel = _playerRb.linearVelocity;
+        
+        // Horizontal correction
+        Vector3 horizontalTarget = new Vector3(targetPos.x, 0, targetPos.z);
+        Vector3 horizontalBall = new Vector3(currentBallPos.x, 0, currentBallPos.z);
+        Vector3 diff = horizontalTarget - horizontalBall;
+        
+        // High spring force for responsiveness
+        Vector3 correction = diff * correctionSpeed;
+        
+        // Match player velocity and add correction
+        Vector3 targetVel = playerVel + correction;
+        
+        // Vertical logic: Keep ball grounded but allow physics to resolve
+        float targetY = targetPos.y;
+        float currentY = currentBallPos.y;
+        float yVel = (targetY - currentY) * 15f;
+        
+        // Apply final velocity
+        Ball.Instance.rb.linearVelocity = new Vector3(targetVel.x, yVel, targetVel.z);
+    }
 
   private void GainPossession()
   {

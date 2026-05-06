@@ -42,44 +42,59 @@ public class PlayerMovement : MonoBehaviour
 
     private void Update()
     {
-        // Cache the camera's forward/right ONCE since it never rotates.
-        // Reading it every frame creates a feedback loop with the CameraController
-        // that causes visible jitter.
-        if (!_directionsCached && Camera.main != null)
-        {
-            _camForward = Camera.main.transform.forward;
-            _camRight = Camera.main.transform.right;
-            _camForward.y = 0f;
-            _camRight.y = 0f;
-            _camForward.Normalize();
-            _camRight.Normalize();
-            _directionsCached = true;
-        }
+        if (Camera.main == null) return;
+
+        // Get camera-relative directions every frame for a follow camera
+        Vector3 camForward = Camera.main.transform.forward;
+        Vector3 camRight = Camera.main.transform.right;
+        camForward.y = 0f;
+        camRight.y = 0f;
+        camForward.Normalize();
+        camRight.Normalize();
 
         float xInput = Input.GetAxis("Horizontal");
         float zInput = Input.GetAxis("Vertical");
 
-        moveDirection = (_camRight * xInput + _camForward * zInput).normalized;
+        // Calculate move direction relative to camera
+        moveDirection = (camRight * xInput + camForward * zInput);
+        
+        // Clamp magnitude to 1 for consistent speed across all directions
+        if (moveDirection.magnitude > 1f) moveDirection.Normalize();
 
         if (animator != null)
         {
+            // Use moveDirection.magnitude for the animation parameter
             animator.SetFloat("Speed", moveDirection.magnitude);
         }
 
-        // Handle rotation in Update for smoother visual turning
-        if (moveDirection != Vector3.zero)
+        // Handle rotation: Snappy but smooth turning toward move direction
+        if (moveDirection.magnitude > 0.1f)
         {
+            Quaternion targetRotation = Quaternion.LookRotation(moveDirection);
             transform.rotation = Quaternion.Slerp(
                 transform.rotation,
-                Quaternion.LookRotation(moveDirection),
+                targetRotation,
                 Time.deltaTime * rotationSpeed);
         }
     }
 
     private void FixedUpdate()
     {
-        // Use MovePosition for smooth physics-based movement
-        Vector3 newPos = rb.position + moveDirection * moveSpeed * Time.fixedDeltaTime;
-        rb.MovePosition(newPos);
+        // 1. Calculate horizontal movement
+        Vector3 horizontalMove = moveDirection * moveSpeed * Time.fixedDeltaTime;
+        
+        // 2. Get current vertical velocity (gravity's effect)
+        // We preserve the vertical change that happened since last FixedUpdate
+        Vector3 newPos = rb.position + horizontalMove;
+        
+        // Note: MovePosition with a non-kinematic Rigidbody will still
+        // apply gravity IF we don't force the Y every frame. 
+        // But the most robust way to mix manual control + gravity is velocity.
+        
+        Vector3 currentVel = rb.linearVelocity;
+        Vector3 targetVel = moveDirection * moveSpeed;
+        
+        // Apply target velocity to X and Z, keep gravity on Y
+        rb.linearVelocity = new Vector3(targetVel.x, currentVel.y, targetVel.z);
     }
 }
