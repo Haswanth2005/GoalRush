@@ -5,15 +5,23 @@ public class PlayerMovement : MonoBehaviour
 {
     public float moveSpeed = 6f;
     public float rotationSpeed = 10f;
+    public float acceleration = 30f;
+    public float deceleration = 36f;
     public Animator animator;
 
-    private Rigidbody rb;
-    private Vector3 moveDirection;
+    [Header("Ground Check")]
+    [Tooltip("LayerMask for the ground. Excludes Player layer (16) by default.")]
+    public LayerMask groundLayer = ~(1 << 16); // everything except Player layer
+    public float groundCheckDistance = 0.25f;    // ray length below capsule bottom
 
-    // Cached camera directions (set once since camera never rotates)
-    private Vector3 _camForward;
-    private Vector3 _camRight;
-    private bool _directionsCached = false;
+    private Rigidbody rb;
+    private CapsuleCollider capsule;
+    private Vector3 moveDirection;
+    private bool isGrounded;
+
+    private static readonly int SpeedHash = Animator.StringToHash("Speed");
+    private static readonly int MoveXHash = Animator.StringToHash("MoveX");
+    private static readonly int MoveYHash = Animator.StringToHash("MoveY");
 
     private void Awake()
     {
@@ -22,7 +30,17 @@ public class PlayerMovement : MonoBehaviour
         // Interpolate for smooth visual movement between physics steps
         rb.interpolation = RigidbodyInterpolation.Interpolate;
 
+        capsule = GetComponent<CapsuleCollider>();
+
         if (animator == null) animator = GetComponentInChildren<Animator>();
+
+        // IMPORTANT: Disable root motion — the walk animation has baked Y movement
+        // that lifts the player off the ground. We drive all movement via Rigidbody.
+        if (animator != null)
+        {
+            animator.applyRootMotion = false;
+            animator.updateMode = AnimatorUpdateMode.Fixed;
+        }
     }
 
     private void OnEnable()
@@ -30,6 +48,7 @@ public class PlayerMovement : MonoBehaviour
         // Reset move direction so the player doesn't keep drifting
         // from a previous input when control switches to them
         moveDirection = Vector3.zero;
+        if (animator != null) animator.SetFloat(SpeedHash, 0f);
     }
 
     private void OnDisable()
@@ -38,11 +57,23 @@ public class PlayerMovement : MonoBehaviour
         moveDirection = Vector3.zero;
         if (rb != null)
             rb.linearVelocity = Vector3.zero;
+        if (animator != null) animator.SetFloat(SpeedHash, 0f);
     }
 
     private void Update()
     {
         if (Camera.main == null) return;
+
+        // Block all player input outside of Playing state
+        bool canPlay = GameManager.Instance == null ||
+                       GameManager.Instance.currentState == GameState.Playing;
+
+        if (!canPlay)
+        {
+            moveDirection = Vector3.zero;
+            if (animator != null) animator.SetFloat(SpeedHash, 0f);
+            return;
+        }
 
         // Get camera-relative directions every frame for a follow camera
         Vector3 camForward = Camera.main.transform.forward;
@@ -60,41 +91,77 @@ public class PlayerMovement : MonoBehaviour
         
         // Clamp magnitude to 1 for consistent speed across all directions
         if (moveDirection.magnitude > 1f) moveDirection.Normalize();
-
-        if (animator != null)
-        {
-            // Use moveDirection.magnitude for the animation parameter
-            animator.SetFloat("Speed", moveDirection.magnitude);
-        }
-
-        // Handle rotation: Snappy but smooth turning toward move direction
-        if (moveDirection.magnitude > 0.1f)
-        {
-            Quaternion targetRotation = Quaternion.LookRotation(moveDirection);
-            transform.rotation = Quaternion.Slerp(
-                transform.rotation,
-                targetRotation,
-                Time.deltaTime * rotationSpeed);
-        }
     }
 
     private void FixedUpdate()
     {
-        // 1. Calculate horizontal movement
-        Vector3 horizontalMove = moveDirection * moveSpeed * Time.fixedDeltaTime;
-        
-        // 2. Get current vertical velocity (gravity's effect)
-        // We preserve the vertical change that happened since last FixedUpdate
-        Vector3 newPos = rb.position + horizontalMove;
-        
-        // Note: MovePosition with a non-kinematic Rigidbody will still
-        // apply gravity IF we don't force the Y every frame. 
-        // But the most robust way to mix manual control + gravity is velocity.
-        
+        CheckGrounded();
+
         Vector3 currentVel = rb.linearVelocity;
-        Vector3 targetVel = moveDirection * moveSpeed;
-        
-        // Apply target velocity to X and Z, keep gravity on Y
-        rb.linearVelocity = new Vector3(targetVel.x, currentVel.y, targetVel.z);
+        Vector3 currentHorizontal = new Vector3(currentVel.x, 0f, currentVel.z);
+        Vector3 targetHorizontal = moveDirection * moveSpeed;
+        float accel = targetHorizontal.sqrMagnitude > currentHorizontal.sqrMagnitude ? acceleration : deceleration;
+        Vector3 newHorizontal = Vector3.MoveTowards(currentHorizontal, targetHorizontal, accel * Time.fixedDeltaTime);
+
+        // Rotate from actual horizontal movement to keep body direction aligned with motion.
+        if (newHorizontal.sqrMagnitude > 0.01f)
+        {
+            Quaternion targetRotation = Quaternion.LookRotation(newHorizontal.normalized);
+            rb.MoveRotation(Quaternion.Slerp(rb.rotation, targetRotation, Time.fixedDeltaTime * rotationSpeed));
+        }
+
+        float verticalVel;
+        if (isGrounded)
+        {
+            // Snap the player firmly to the ground without applying a constant massive downward force that causes jitter
+            verticalVel = currentVel.y < -0.1f ? currentVel.y : -2f;
+        }
+        else
+        {
+            // In the air: let gravity accumulate naturally
+            verticalVel = currentVel.y;
+        }
+
+        // Apply horizontal movement + resolved vertical velocity
+        rb.linearVelocity = new Vector3(newHorizontal.x, verticalVel, newHorizontal.z);
+
+        // Drive animation from actual local velocity so blend follows direction and speed.
+        if (animator != null)
+        {
+            Vector3 horizontalVel = rb.linearVelocity;
+            horizontalVel.y = 0f;
+            Vector3 localVel = transform.InverseTransformDirection(horizontalVel);
+            float speed01 = Mathf.Clamp01(horizontalVel.magnitude / Mathf.Max(0.01f, moveSpeed));
+
+            animator.SetFloat(SpeedHash, speed01, 0.08f, Time.fixedDeltaTime);
+            animator.SetFloat(MoveXHash, Mathf.Clamp(localVel.x / Mathf.Max(0.01f, moveSpeed), -1f, 1f), 0.08f, Time.fixedDeltaTime);
+            animator.SetFloat(MoveYHash, Mathf.Clamp(localVel.z / Mathf.Max(0.01f, moveSpeed), -1f, 1f), 0.08f, Time.fixedDeltaTime);
+        }
+    }
+
+    /// <summary>
+    /// Casts a short ray from the bottom of the capsule to detect the ground.
+    /// More reliable than OnCollisionStay for slope/edge cases.
+    /// </summary>
+    private void CheckGrounded()
+    {
+        if (capsule == null)
+        {
+            isGrounded = false;
+            return;
+        }
+
+        // Bottom-centre of the capsule in world space
+        Vector3 bottom = transform.TransformPoint(capsule.center)
+                         - Vector3.up * (capsule.height * 0.5f * transform.lossyScale.y - capsule.radius * transform.lossyScale.y);
+
+        isGrounded = Physics.SphereCast(
+            bottom + Vector3.up * 0.05f,    // start slightly inside to avoid tunnelling
+            capsule.radius * transform.lossyScale.x * 0.9f,
+            Vector3.down,
+            out _,
+            groundCheckDistance,
+            groundLayer,
+            QueryTriggerInteraction.Ignore);
     }
 }

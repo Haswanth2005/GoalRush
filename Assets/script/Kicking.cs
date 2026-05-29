@@ -33,6 +33,14 @@ public class Kicking : MonoBehaviour
     {
         if (_team._currentPlayer.Count == 0) return;
 
+        // Block kicking outside of Playing state
+        if (GameManager.Instance != null && GameManager.Instance.currentState != GameState.Playing)
+        {
+            _isCharging = false;
+            _chargeTimer = 0f;
+            return;
+        }
+
         Player current = _team._currentPlayer[0];
 
         // Cancel charge if the player loses possession mid-charge
